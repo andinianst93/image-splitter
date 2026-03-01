@@ -1,0 +1,28 @@
+# Binaries
+image-splitter
+image-splitter.exe
+*.exe
+*.out
+
+# Output directory
+output/
+
+# Go build cache
+*.test
+*.prof
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go module cache (tidak perlu di-commit)
+vendor/
