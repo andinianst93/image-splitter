@@ -32,7 +32,13 @@ func DetectHorizSeams(src image.Image, rows int) []int {
 	for i := 0; i < rows-1; i++ {
 		expected := (i + 1) * H / rows
 		approx := bestInWindow(smoothed, expected, tol)
-		seams[i] = b.Min.Y + snapToGapCenter(raw, approx, tol)
+		if refined := refineApprox(raw, approx); refined != approx {
+			// Smoothing shifted the peak; the true transition has no separator
+			// gap, so use the raw peak directly without snapToGapCenter.
+			seams[i] = b.Min.Y + refined
+		} else {
+			seams[i] = b.Min.Y + snapToGapCenter(raw, approx, tol)
+		}
 	}
 	return seams
 }
@@ -57,7 +63,11 @@ func DetectVertSeams(src image.Image, cols int) []int {
 	for i := 0; i < cols-1; i++ {
 		expected := (i + 1) * W / cols
 		approx := bestInWindow(smoothed, expected, tol)
-		seams[i] = b.Min.X + snapToGapCenter(raw, approx, tol)
+		if refined := refineApprox(raw, approx); refined != approx {
+			seams[i] = b.Min.X + refined
+		} else {
+			seams[i] = b.Min.X + snapToGapCenter(raw, approx, tol)
+		}
 	}
 	return seams
 }
@@ -115,6 +125,33 @@ func boxSmooth(energy []float64, radius int) []float64 {
 		out[i] = sum / float64(hi-lo+1)
 	}
 	return out
+}
+
+// refineRadius is the half-width used when snapping from the smoothed-energy
+// peak back to the nearest raw-energy peak (see refineApprox).
+const refineRadius = 12
+
+// refineMinRatio is the minimum ratio raw[refined]/raw[approx] required before
+// we accept a refinement. A large ratio means box-smoothing shifted the peak
+// substantially away from the true transition; a small ratio means the
+// smoothed peak is already at a good location and refining would only add noise.
+const refineMinRatio = 3.0
+
+// refineApprox snaps the smoothed-energy peak back to the nearest true
+// raw-energy peak, but only when the raw peak is substantially stronger
+// (≥ refineMinRatio ×) than the energy at approx. This corrects for the
+// case where box-smoothing shifts the apparent maximum away from the actual
+// content-transition spike (e.g. a sharp double-spike at the photo boundary
+// produces a smoothed hump whose apex lands a few pixels past the spikes).
+// When the smoothed peak is already well-aligned (typical for separator-based
+// collages), raw[approx] is already high, the ratio is small, and approx is
+// returned unchanged — preserving the existing correct behavior.
+func refineApprox(raw []float64, approx int) int {
+	best := bestInWindow(raw, approx, refineRadius)
+	if best != approx && raw[approx] > 0 && raw[best]/raw[approx] >= refineMinRatio {
+		return best
+	}
+	return approx
 }
 
 // tolerancePx returns the search window half-width for each seam.

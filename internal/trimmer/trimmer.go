@@ -62,6 +62,12 @@ func trimBorderOnce(src image.Image, tolerance int) image.Image {
 	if !ok {
 		return src
 	}
+	// Reject tinted border colors. Real collage separators (grey, white, black)
+	// are near-neutral (R ≈ G ≈ B). Warm or cool photo content at cell edges
+	// has a color cast; treating it as a border would crop actual photo content.
+	if chromaSum(border) > 30 {
+		return src
+	}
 
 	top := b.Min.Y
 	for top < b.Max.Y && rowIsBorder(src, top, ix0, ix1, border, tolerance) {
@@ -210,4 +216,22 @@ func colIsBorder(src image.Image, x, y0, y1 int, border color.RGBA, tolerance in
 		}
 	}
 	return true
+}
+
+// chromaSum returns |R-G| + |G-B| + |R-B| — a measure of how "tinted" a color
+// is away from neutral grey. Pure grey/white/black returns 0.
+func chromaSum(c color.RGBA) int {
+	rg := int(c.R) - int(c.G)
+	if rg < 0 {
+		rg = -rg
+	}
+	gb := int(c.G) - int(c.B)
+	if gb < 0 {
+		gb = -gb
+	}
+	rb := int(c.R) - int(c.B)
+	if rb < 0 {
+		rb = -rb
+	}
+	return rg + gb + rb
 }
