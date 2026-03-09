@@ -86,6 +86,10 @@ func run(cfg *config.Config) error {
 		return err
 	}
 
+	// Read DPI metadata from the source file to preserve it in output cells.
+	// Go's png.Encode does not write pHYs; we inject it manually in Save.
+	xppu, yppu, _ := imageio.ReadPHYs(cfg.InputPath)
+
 	// Pre-trim: remove uniform-color outer border from the source image before
 	// splitting. This handles collages where the dark/light border surrounds the
 	// entire image. The trimmed image is then used for all subsequent steps.
@@ -166,6 +170,8 @@ func run(cfg *config.Config) error {
 			OutputDir: cfg.OutputDir,
 			Filename:  filename,
 			Quality:   cfg.Quality,
+			XPPU:      xppu,
+			YPPU:      yppu,
 		}
 		if err := imageio.Save(out, opts); err != nil {
 			return fmt.Errorf("save cell [%d,%d]: %w", cell.Row, cell.Col, err)
