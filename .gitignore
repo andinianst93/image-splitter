@@ -1,4 +1,6 @@
 # Binaries
+bin/
+dist/
 image-splitter
 image-splitter.exe
 *.exe

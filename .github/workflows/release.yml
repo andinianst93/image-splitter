@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build all platforms
+        run: |
+          mkdir -p dist
+          GOOS=darwin  GOARCH=arm64 go build -o dist/image-splitter-darwin-arm64 .
+          GOOS=darwin  GOARCH=amd64 go build -o dist/image-splitter-darwin-amd64 .
+          GOOS=linux   GOARCH=amd64 go build -o dist/image-splitter-linux-amd64 .
+          GOOS=windows GOARCH=amd64 go build -o dist/image-splitter-windows-amd64.exe .
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

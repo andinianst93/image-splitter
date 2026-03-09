@@ -52,6 +52,12 @@ go test ./... -run TestSplit  # run specific tests
 - Last grid row/column absorbs remainder pixels when dimensions are not evenly divisible
 - SubImage is zero-copy; fallback to `draw.Draw` for image types that don't implement it
 
+## Planned Features
+
+- **`reassemble` subcommand** (`cmd/reassemble.go`): rebuild a collage from split cells with
+  optional `--order` flag for rearranging cells into a different grid layout (e.g. 4×2 → 2×4).
+  Currently a stub that returns "not yet implemented".
+
 ## Do Not
 
 - Do not add external dependencies without discussing first

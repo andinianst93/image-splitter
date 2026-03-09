@@ -3,6 +3,7 @@ package splitter
 import (
 	"image"
 	"math"
+	"sort"
 )
 
 // DetectHorizSeams returns the y-coordinates of the (rows-1) best horizontal
@@ -152,4 +153,86 @@ func iabs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// DetectGridSize automatically determines the number of rows and columns in a
+// grid/collage image by finding significant high-energy seam lines.
+// Returns at least (1, 1) for any input.
+func DetectGridSize(src image.Image) (rows, cols int) {
+	b := src.Bounds()
+	H := b.Dy()
+	W := b.Dx()
+
+	hEnergy := make([]float64, H)
+	for y := 1; y < H; y++ {
+		hEnergy[y] = horizEnergy(src, b.Min.Y+y)
+	}
+	hMinDist := H / 10
+	if hMinDist < 20 {
+		hMinDist = 20
+	}
+	hPeaks := findSignificantPeaks(boxSmooth(hEnergy, 7), hMinDist)
+
+	vEnergy := make([]float64, W)
+	for x := 1; x < W; x++ {
+		vEnergy[x] = vertEnergy(src, b.Min.X+x)
+	}
+	vMinDist := W / 10
+	if vMinDist < 20 {
+		vMinDist = 20
+	}
+	vPeaks := findSignificantPeaks(boxSmooth(vEnergy, 7), vMinDist)
+
+	return len(hPeaks) + 1, len(vPeaks) + 1
+}
+
+// findSignificantPeaks finds peaks in a smoothed energy profile that likely
+// represent grid/collage seam boundaries. minDist is the minimum pixel
+// separation required between two distinct peaks.
+func findSignificantPeaks(energy []float64, minDist int) []int {
+	n := len(energy)
+	if n < 3 {
+		return nil
+	}
+
+	// Sort a copy to compute a dynamic threshold.
+	sorted := make([]float64, n)
+	copy(sorted, energy)
+	sort.Float64s(sorted)
+
+	// Find the largest gap in the top 25% of energy values.
+	// The lower bound of that gap separates seam-level energy from photo content.
+	startIdx := n * 3 / 4
+	threshold := sorted[n*9/10] // fallback: 90th percentile
+	maxGap := -1.0
+	for i := startIdx; i < n-1; i++ {
+		if gap := sorted[i+1] - sorted[i]; gap > maxGap {
+			maxGap = gap
+			threshold = sorted[i] // lower boundary: everything strictly above is seam-level
+		}
+	}
+
+	// Collect local maxima strictly above the threshold.
+	var candidates []int
+	for i := 1; i < n-1; i++ {
+		if energy[i] <= threshold {
+			continue
+		}
+		if energy[i] >= energy[i-1] && energy[i] >= energy[i+1] {
+			candidates = append(candidates, i)
+		}
+	}
+
+	// Enforce minimum distance: when two candidates are too close, keep the
+	// one with higher energy.
+	var peaks []int
+	for _, idx := range candidates {
+		if len(peaks) == 0 || idx-peaks[len(peaks)-1] >= minDist {
+			peaks = append(peaks, idx)
+		} else if energy[idx] > energy[peaks[len(peaks)-1]] {
+			peaks[len(peaks)-1] = idx
+		}
+	}
+
+	return peaks
 }

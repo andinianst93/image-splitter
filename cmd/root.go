@@ -7,6 +7,7 @@ import (
 	"github.com/andinianst93/image-splitter/internal/config"
 	"github.com/andinianst93/image-splitter/internal/imageio"
 	"github.com/andinianst93/image-splitter/internal/splitter"
+	"github.com/andinianst93/image-splitter/internal/trimmer"
 	"github.com/andinianst93/image-splitter/internal/upscaler"
 	"github.com/spf13/cobra"
 )
@@ -21,11 +22,12 @@ var rootCmd = &cobra.Command{
 Specify the number of rows and columns in the grid, and optionally an output
 directory, JPEG quality, and upscaling factor.
 
-Use --auto to let the tool detect the exact photo boundaries automatically
-(recommended for real collage images where row/column sizes are not perfectly equal).
+Use --auto to let the tool detect the exact photo boundaries automatically.
+When --rows/--cols are omitted, --auto also detects the grid size automatically.
 
 Examples:
   image-splitter photo.jpg --rows 2 --cols 3
+  image-splitter photo.jpg --auto
   image-splitter photo.jpg --rows 2 --cols 3 --auto
   image-splitter photo.jpg --rows 2 --cols 3 --quality 90 --scale 2.0 --output ./tiles`,
 	Args: cobra.ExactArgs(1),
@@ -49,18 +51,18 @@ func init() {
 	rootCmd.Flags().IntVarP(&cfg.Quality, "quality", "q", 0, "JPEG quality 1-100; omit or 0 for PNG output")
 	rootCmd.Flags().Float64VarP(&cfg.Scale, "scale", "s", 1.0, "upscale factor applied to each cell (>= 1.0)")
 	rootCmd.Flags().BoolVarP(&cfg.AutoDetect, "auto", "a", false, "auto-detect exact seam positions (recommended for real collages)")
-
-	_ = rootCmd.MarkFlagRequired("rows")
-	_ = rootCmd.MarkFlagRequired("cols")
+	rootCmd.Flags().BoolVarP(&cfg.Trim, "trim", "t", false, "auto-detect and remove uniform-color border pixels from each cell")
 }
 
 // validate checks all config constraints before any I/O.
 func validate(cfg *config.Config) error {
-	if cfg.Rows < 1 {
-		return fmt.Errorf("--rows must be >= 1")
-	}
-	if cfg.Cols < 1 {
-		return fmt.Errorf("--cols must be >= 1")
+	if !cfg.AutoDetect {
+		if cfg.Rows < 1 {
+			return fmt.Errorf("--rows must be >= 1 (or use --auto to detect grid size)")
+		}
+		if cfg.Cols < 1 {
+			return fmt.Errorf("--cols must be >= 1 (or use --auto to detect grid size)")
+		}
 	}
 	if cfg.Quality != 0 && (cfg.Quality < 1 || cfg.Quality > 100) {
 		return fmt.Errorf("--quality must be 0 (PNG) or between 1 and 100, got %d", cfg.Quality)
@@ -81,6 +83,18 @@ func run(cfg *config.Config) error {
 	img, _, err := imageio.Load(cfg.InputPath)
 	if err != nil {
 		return err
+	}
+
+	// Auto-detect grid size when rows/cols are not explicitly provided.
+	if cfg.AutoDetect && (cfg.Rows == 0 || cfg.Cols == 0) {
+		detectedRows, detectedCols := splitter.DetectGridSize(img)
+		if cfg.Rows == 0 {
+			cfg.Rows = detectedRows
+		}
+		if cfg.Cols == 0 {
+			cfg.Cols = detectedCols
+		}
+		fmt.Printf("Auto-detected grid size: %d rows × %d cols\n", cfg.Rows, cfg.Cols)
 	}
 
 	b := img.Bounds()
@@ -118,10 +132,19 @@ func run(cfg *config.Config) error {
 	}
 	nameFmt := fmt.Sprintf("cell_row%%0%dd_col%%0%dd", rowPad, colPad)
 
+	ext := "png"
+	if cfg.Quality > 0 {
+		ext = "jpg"
+	}
+
 	fmt.Printf("Splitting %q into %d×%d cells → %s\n", cfg.InputPath, cfg.Rows, cfg.Cols, cfg.OutputDir)
 
 	for _, cell := range cells {
 		out := cell.Image
+
+		if cfg.Trim {
+			out = trimmer.TrimBorder(out, 15)
+		}
 
 		if cfg.Scale > 1.0 {
 			out, err = upscaler.Scale(out, cfg.Scale)
@@ -140,13 +163,15 @@ func run(cfg *config.Config) error {
 			return fmt.Errorf("save cell [%d,%d]: %w", cell.Row, cell.Col, err)
 		}
 
-		ext := "png"
-		if cfg.Quality > 0 {
-			ext = "jpg"
-		}
 		fmt.Printf("  wrote %s.%s\n", filename, ext)
 	}
 
 	fmt.Printf("Done. %d cells written to %s\n", len(cells), cfg.OutputDir)
+	fmt.Println()
+	fmt.Println("To rebuild a collage from these cells:")
+	fmt.Printf("  ImageMagick:  montage %s/cell_*.%s -tile %dx%d -geometry +0+0 collage.%s\n",
+		cfg.OutputDir, ext, cfg.Cols, cfg.Rows, ext)
+	fmt.Printf("  Reassemble:   image-splitter reassemble --input %s --rows %d --cols %d\n",
+		cfg.OutputDir, cfg.Rows, cfg.Cols)
 	return nil
 }

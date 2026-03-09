@@ -506,3 +506,84 @@ func abs2(x int) int {
 	}
 	return x
 }
+
+// ── DetectGridSize ────────────────────────────────────────────────────────────
+
+// gridImage builds a rows×cols image where each cell has a distinct solid color,
+// creating sharp high-energy seam boundaries.
+func gridImage(heights, widths []int) *image.RGBA {
+	totalH := sumInts(heights)
+	totalW := sumInts(widths)
+	img := image.NewRGBA(image.Rect(0, 0, totalW, totalH))
+	palette := [6]color.RGBA{
+		{R: 200, A: 255}, {G: 200, A: 255}, {B: 200, A: 255},
+		{R: 100, G: 100, A: 255}, {G: 100, B: 100, A: 255}, {R: 100, B: 100, A: 255},
+	}
+	for r, h := range heights {
+		for c, w := range widths {
+			col := palette[(r*len(widths)+c)%len(palette)]
+			y0 := sumInts(heights[:r])
+			x0 := sumInts(widths[:c])
+			for y := y0; y < y0+h; y++ {
+				for x := x0; x < x0+w; x++ {
+					img.SetRGBA(x, y, col)
+				}
+			}
+		}
+	}
+	return img
+}
+
+func TestDetectGridSize(t *testing.T) {
+	tests := []struct {
+		name               string
+		src                image.Image
+		wantRows, wantCols int
+	}{
+		{
+			name:     "2x3 equal grid",
+			src:      gridImage([]int{200, 200}, []int{150, 150, 150}),
+			wantRows: 2, wantCols: 3,
+		},
+		{
+			name:     "3x2 equal grid",
+			src:      gridImage([]int{100, 100, 100}, []int{200, 200}),
+			wantRows: 3, wantCols: 2,
+		},
+		{
+			name:     "1x3 horizontal strip (cols only)",
+			src:      stripedVert(200, []int{150, 150, 150}),
+			wantRows: 1, wantCols: 3,
+		},
+		{
+			name:     "3x1 vertical strip (rows only)",
+			src:      stripedHoriz(200, []int{100, 100, 100}),
+			wantRows: 3, wantCols: 1,
+		},
+		{
+			name:     "1x1 solid image (no seams)",
+			src:      solidImage(400, 300, color.RGBA{R: 128, G: 64, B: 32, A: 255}),
+			wantRows: 1, wantCols: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows, cols := DetectGridSize(tt.src)
+			if rows != tt.wantRows {
+				t.Errorf("rows: want %d, got %d", tt.wantRows, rows)
+			}
+			if cols != tt.wantCols {
+				t.Errorf("cols: want %d, got %d", tt.wantCols, cols)
+			}
+		})
+	}
+}
+
+func TestDetectGridSize_MinimumOneByOne(t *testing.T) {
+	// Should never return less than 1×1.
+	src := solidImage(30, 30, color.RGBA{R: 255, A: 255})
+	rows, cols := DetectGridSize(src)
+	if rows < 1 || cols < 1 {
+		t.Errorf("want at least 1×1, got %d×%d", rows, cols)
+	}
+}
