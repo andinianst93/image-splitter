@@ -21,17 +21,18 @@ func DetectHorizSeams(src image.Image, rows int) []int {
 	b := src.Bounds()
 	H := b.Dy()
 
-	energy := make([]float64, H)
+	raw := make([]float64, H)
 	for y := 1; y < H; y++ {
-		energy[y] = horizEnergy(src, b.Min.Y+y)
+		raw[y] = horizEnergy(src, b.Min.Y+y)
 	}
-	smoothed := boxSmooth(energy, 7)
+	smoothed := boxSmooth(raw, 7)
 
 	seams := make([]int, rows-1)
 	tol := tolerancePx(H, rows)
 	for i := 0; i < rows-1; i++ {
 		expected := (i + 1) * H / rows
-		seams[i] = b.Min.Y + bestInWindow(smoothed, expected, tol)
+		approx := bestInWindow(smoothed, expected, tol)
+		seams[i] = b.Min.Y + snapToGapCenter(raw, approx, tol)
 	}
 	return seams
 }
@@ -45,17 +46,18 @@ func DetectVertSeams(src image.Image, cols int) []int {
 	b := src.Bounds()
 	W := b.Dx()
 
-	energy := make([]float64, W)
+	raw := make([]float64, W)
 	for x := 1; x < W; x++ {
-		energy[x] = vertEnergy(src, b.Min.X+x)
+		raw[x] = vertEnergy(src, b.Min.X+x)
 	}
-	smoothed := boxSmooth(energy, 7)
+	smoothed := boxSmooth(raw, 7)
 
 	seams := make([]int, cols-1)
 	tol := tolerancePx(W, cols)
 	for i := 0; i < cols-1; i++ {
 		expected := (i + 1) * W / cols
-		seams[i] = b.Min.X + bestInWindow(smoothed, expected, tol)
+		approx := bestInWindow(smoothed, expected, tol)
+		seams[i] = b.Min.X + snapToGapCenter(raw, approx, tol)
 	}
 	return seams
 }
@@ -123,6 +125,60 @@ func tolerancePx(total, n int) int {
 		t = 10
 	}
 	return t
+}
+
+// snapToGapCenter tries to move the seam from a high-energy transition point
+// to the center of the solid-color gap that it borders. It scans forward then
+// backward from pos looking for a bounded low-energy run (rows with energy
+// < 15% of the peak) that is terminated on both sides by high energy.
+// This "bounded" requirement prevents the algorithm from snapping into the
+// interior of a photo band (which also has low energy but extends much further).
+// If no such gap is found within maxScan rows, pos is returned unchanged.
+func snapToGapCenter(raw []float64, pos, maxScan int) int {
+	n := len(raw)
+	peakE := raw[pos]
+	if peakE < 5 {
+		return pos // already inside a gap or trivial image
+	}
+	gapThresh := peakE * 0.15
+
+	// Forward scan: gap lies just after this transition (photo→gap direction).
+	{
+		runStart := -1
+		for i := pos + 1; i <= pos+maxScan && i < n; i++ {
+			if raw[i] <= gapThresh {
+				if runStart < 0 {
+					runStart = i
+				}
+			} else if runStart >= 0 {
+				// High energy found after the low run → bounded gap confirmed.
+				if i-runStart >= 3 {
+					return (runStart + i - 1) / 2
+				}
+				break
+			}
+		}
+	}
+
+	// Backward scan: gap lies just before this transition (gap→photo direction).
+	{
+		runEnd := -1
+		for i := pos - 1; i >= pos-maxScan && i >= 0; i-- {
+			if raw[i] <= gapThresh {
+				if runEnd < 0 {
+					runEnd = i
+				}
+			} else if runEnd >= 0 {
+				// High energy found before the low run → bounded gap confirmed.
+				if runEnd-i >= 3 {
+					return (i + 1 + runEnd) / 2
+				}
+				break
+			}
+		}
+	}
+
+	return pos
 }
 
 // bestInWindow finds the index with the highest energy value in

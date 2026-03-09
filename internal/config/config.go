@@ -9,5 +9,6 @@ type Config struct {
 	Quality    int     // --quality flag, 1-100; 0 means write PNG
 	Scale      float64 // --scale flag, 1.0 means no upscaling
 	AutoDetect bool    // --auto flag: detect seam positions automatically
-	Trim       bool    // --trim flag: auto-detect and remove uniform-color border pixels from each cell
+	Trim          bool // --trim flag: auto-detect and remove uniform-color border pixels from each cell
+	TrimTolerance int  // --trim-tolerance flag: max RGB channel diff for border detection (default 40)
 }

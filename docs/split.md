@@ -43,7 +43,8 @@ Ada tiga cara pakai:
 | `--rows` | `-r` | `0` | Jumlah baris dalam grid |
 | `--cols` | `-c` | `0` | Jumlah kolom dalam grid |
 | `--auto` | `-a` | `false` | Auto-detect seam & ukuran grid |
-| `--trim` | `-t` | `false` | Auto-hapus border seragam dari setiap sel |
+| `--trim` | `-t` | `false` | Auto-hapus border seragam dari sumber dan setiap sel |
+| `--trim-tolerance` | _(none)_ | `40` | Max perbedaan RGB untuk deteksi warna border |
 | `--output` | `-o` | `./output` | Direktori tempat menyimpan hasil |
 | `--quality` | `-q` | `0` | Format & kualitas output (0 = PNG, 1–100 = JPEG) |
 | `--scale` | `-s` | `1.0` | Faktor perbesar ukuran tiap sel (≥ 1.0) |
@@ -149,7 +150,7 @@ Hasilnya tiap sel bisa **tidak sama persis ukurannya** — tapi batas potongan t
 **Kapan perlu `--auto`:**
 - Kolase dibuat oleh Instagram, Canva, atau app lain yang menambahkan padding/gap antar foto
 - Tinggi atau lebar tiap foto dalam kolase tidak persis sama
-- Terlihat garis putih/hitam tipis di antara foto
+- Terlihat garis putih/hitam tipis di antara foto dalam kolase
 
 **Kapan tidak perlu `--auto`:**
 - Sprite sheet / grid programatik → semua sel persis sama ukurannya
@@ -157,37 +158,71 @@ Hasilnya tiap sel bisa **tidak sama persis ukurannya** — tapi batas potongan t
 
 **`--auto` tanpa `--rows`/`--cols`:** tool juga mendeteksi sendiri berapa baris dan kolomnya.
 
+**Penting — `--auto` tidak menghapus border:**
+`--auto` hanya mendeteksi POSISI seam (batas potong) yang lebih presisi, bukan menghapus warna border. Jika gambar punya background gelap/terang, seam masih bisa jatuh di dalam area border tersebut, sehingga hasil potongan masih menyisakan tepi berwarna.
+
+**Untuk hasil bersih (tanpa border), selalu gunakan `--auto` bersama `--trim`:**
+```bash
+bin/image-splitter kolase.jpg --auto --trim
+```
+
+`--trim` akan menghapus border luar sebelum split, lalu membersihkan sisa border dari setiap sel.
+
 ---
 
 ## Flag `--trim`
 
-`--trim` menghapus border berwarna seragam dari setiap sel hasil potongan secara otomatis.
+`--trim` menghapus border/background berwarna seragam secara otomatis.
 
-**Masalah yang diselesaikan:**
+**Cara kerja — dua tahap:**
 
-Saat memotong kolase yang memiliki border/padding gelap di tepinya, seam detection memotong di tengah border — sehingga setiap sel masih menyisakan tepi gelap. `--trim` membersihkan sisa tepi tersebut.
+**Tahap 1 — Pre-trim (sebelum split):** Border luar gambar sumber dideteksi dan dihapus terlebih dahulu, kemudian barulah gambar dipotong. Ini menyelesaikan kasus paling umum: kolase dengan background gelap/terang yang membingkai seluruh gambar.
 
-**Cara kerja:**
+**Tahap 2 — Post-trim (setelah split):** Setiap sel hasil potongan juga di-trim untuk membersihkan sisa gap/border antar foto jika ada.
+
+**Algoritma deteksi border:**
 1. Sampel 4 piksel sudut (kiri-atas, kanan-atas, kiri-bawah, kanan-bawah)
-2. Jika keempat sudut warnanya mirip (toleransi max-channel-diff ≤ 15) → itulah warna border
+2. Jika keempat sudut warnanya mirip (dalam `--trim-tolerance`) → itulah warna border
 3. Jalan dari setiap tepi ke dalam sampai menemukan baris/kolom yang bukan border
-4. Crop gambar ke area interior tersebut
-5. Jika hasil crop lebih kecil dari 10×10 px → kembalikan gambar asli tanpa crop
+4. Crop ke area interior
+5. Jika hasil crop < 10×10 px → dikembalikan tanpa perubahan
 
 **Kapan pakai:**
-- Kolase punya border gelap/terang seragam di tepinya
-- Hasil potongan masih menyisakan tepi hitam/putih
+- Kolase punya background/border gelap atau terang seragam di tepinya (kasus paling umum)
+- Hasil potongan masih menyisakan tepi hitam/putih/abu-abu
 
 **Kapan tidak perlu:**
-- Konten foto menyentuh tepi (tidak ada border)
-- Warna di sudut foto bervariasi (bukan border polos)
+- Konten foto menyentuh tepi tanpa border
+- Warna di sudut foto bervariasi / tidak seragam
 
 ```bash
-# Pakai trim bersama auto-detect
+# Rekomendasi: pakai trim bersama auto-detect
 bin/image-splitter kolase.jpg --auto --trim
 
 # Atau dengan ukuran grid manual
 bin/image-splitter kolase.jpg --rows 2 --cols 3 --trim
+```
+
+---
+
+## Flag `--trim-tolerance`
+
+Mengontrol seberapa "ketat" deteksi warna border. Default: **40**.
+
+| Nilai | Kapan pakai |
+|---|---|
+| `10`–`20` | Gambar PNG lossless — border warnanya sangat seragam |
+| `40` (default) | JPEG — menoleransi artifact kompresi di area border |
+| `50`–`80` | Border warnanya tidak seragam / ada gradasi tipis |
+
+JPEG compression menyebabkan piksel-piksel dalam area warna seragam bisa berbeda 20–30 unit. Nilai default 40 menangani ini.
+
+```bash
+# Ketat (PNG atau border yang sangat bersih)
+bin/image-splitter kolase.png --trim --trim-tolerance 15
+
+# Longgar (JPEG dengan border yang sedikit bervariasi)
+bin/image-splitter kolase.jpg --auto --trim --trim-tolerance 60
 ```
 
 ---
@@ -268,13 +303,17 @@ To rebuild a collage from these cells:
 
 ---
 
-### 3. Auto-detect + trim border
+### 3. Auto-detect + trim border (rekomendasi untuk kolase nyata)
 
 ```bash
 bin/image-splitter kolase.jpg --auto --trim
 ```
 
-Mendeteksi seam dan menghapus border seragam dari setiap sel hasil potongan.
+Urutan yang terjadi:
+1. `--trim` mendeteksi dan menghapus border/background luar dari gambar sumber
+2. `--auto` mendeteksi seam di gambar yang sudah bersih
+3. Split dilakukan di posisi seam yang tepat
+4. `--trim` lagi membersihkan sisa border dari setiap sel hasil potong
 
 ---
 

@@ -52,6 +52,7 @@ func init() {
 	rootCmd.Flags().Float64VarP(&cfg.Scale, "scale", "s", 1.0, "upscale factor applied to each cell (>= 1.0)")
 	rootCmd.Flags().BoolVarP(&cfg.AutoDetect, "auto", "a", false, "auto-detect exact seam positions (recommended for real collages)")
 	rootCmd.Flags().BoolVarP(&cfg.Trim, "trim", "t", false, "auto-detect and remove uniform-color border pixels from each cell")
+	rootCmd.Flags().IntVar(&cfg.TrimTolerance, "trim-tolerance", 60, "max RGB channel difference for border color detection (default 60 handles JPEG artifacts and color-variable borders)")
 }
 
 // validate checks all config constraints before any I/O.
@@ -83,6 +84,13 @@ func run(cfg *config.Config) error {
 	img, _, err := imageio.Load(cfg.InputPath)
 	if err != nil {
 		return err
+	}
+
+	// Pre-trim: remove uniform-color outer border from the source image before
+	// splitting. This handles collages where the dark/light border surrounds the
+	// entire image. The trimmed image is then used for all subsequent steps.
+	if cfg.Trim {
+		img = trimmer.TrimBorder(img, cfg.TrimTolerance)
 	}
 
 	// Auto-detect grid size when rows/cols are not explicitly provided.
@@ -143,7 +151,7 @@ func run(cfg *config.Config) error {
 		out := cell.Image
 
 		if cfg.Trim {
-			out = trimmer.TrimBorder(out, 15)
+			out = trimmer.TrimBorder(out, cfg.TrimTolerance)
 		}
 
 		if cfg.Scale > 1.0 {

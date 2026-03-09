@@ -95,17 +95,22 @@ cmd/root.go: run()
   │
   ├─ validate(cfg)
   ├─ imageio.Load(path)                → image.Image
-  ├─ splitter.DetectGridSize(img)      → rows, cols  [jika --auto tanpa rows/cols]
-  ├─ splitter.DetectHorizSeams(img, n) → []int       [jika --auto]
-  ├─ splitter.DetectVertSeams(img, n)  → []int       [jika --auto]
-  ├─ splitter.SplitAt(img, hSeams, vSeams) → []Cell  [jika --auto]
-  │  atau splitter.Split(img, rows, cols) → []Cell   [jika manual]
+  ├─ trimmer.TrimBorder(img, tol)      → image.Image  [jika --trim: pre-trim sumber]
+  ├─ splitter.DetectGridSize(img)      → rows, cols   [jika --auto tanpa rows/cols]
+  ├─ splitter.DetectHorizSeams(img, n) → []int        [jika --auto]
+  ├─ splitter.DetectVertSeams(img, n)  → []int        [jika --auto]
+  ├─ splitter.SplitAt(img, hSeams, vSeams) → []Cell   [jika --auto]
+  │  atau splitter.Split(img, rows, cols) → []Cell    [jika manual]
   │
   └─ for each cell:
-       ├─ trimmer.TrimBorder(cell, 15)    [jika --trim]
+       ├─ trimmer.TrimBorder(cell, tol)   [jika --trim: post-trim per sel]
        ├─ upscaler.Scale(cell, factor)    [jika --scale > 1.0]
        └─ imageio.Save(cell, opts)
 ```
+
+**Pre-trim vs post-trim:**
+- Pre-trim: menghapus border/background luar dari seluruh gambar sumber sebelum split. Ini menyelesaikan kasus utama (kolase dengan outer border). Seam detection kemudian berjalan pada gambar yang sudah bersih.
+- Post-trim: membersihkan sisa gap/border dari setiap sel setelah split. Berguna jika ada gap antar foto di dalam kolase (bukan hanya outer border).
 
 ### Reassemble pipeline
 
@@ -173,7 +178,8 @@ func DetectGridSize(src image.Image) (rows, cols int)
 ```go
 // TrimBorder mendeteksi dan menghapus border berwarna seragam dari src.
 // tolerance = max perbedaan channel RGB yang masih dianggap "sama warna border"
-// (nilai rekomendasi: 15)
+// Default dari cmd: 40 (menangani JPEG compression artifacts)
+// Dikontrol via flag --trim-tolerance
 func TrimBorder(src image.Image, tolerance int) image.Image
 ```
 

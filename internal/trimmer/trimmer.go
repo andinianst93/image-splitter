@@ -12,64 +12,106 @@ type subImager interface {
 	SubImage(r image.Rectangle) image.Image
 }
 
-// TrimBorder detects and removes a uniform-color border from src.
+// TrimBorder detects and removes a uniform-color border from src, iterating
+// until no further border is found. Iteration handles collages whose cells have
+// two distinct border layers (e.g. a narrow white separator followed by a wider
+// grey background), where a single pass can only remove one layer at a time.
 //
-// Algorithm:
-//  1. Sample the 4 corner pixels. If all 4 are within tolerance of each other
-//     (max RGB channel diff), the top-left corner is used as the border color.
-//  2. If corners disagree → return src unchanged (can't determine border color).
+// Algorithm per iteration:
+//  1. Try candidate border colors from the 4 corners and the 4 edge midpoints.
+//     The first candidate whose color is shared by at least one full edge row or
+//     column (within tolerance) becomes the border color.
+//  2. If no candidate produces a uniform edge → stop iterating and return current src.
 //  3. Walk inward from each edge to find the first row/col that is NOT
 //     entirely the border color.
 //  4. If the resulting crop would be smaller than 10×10 → return src unchanged.
 //  5. Return the cropped image (zero-copy via SubImage when possible).
 func TrimBorder(src image.Image, tolerance int) image.Image {
+	for {
+		prev := src
+		src = trimBorderOnce(src, tolerance)
+		if src == prev {
+			return src
+		}
+	}
+}
+
+func trimBorderOnce(src image.Image, tolerance int) image.Image {
 	b := src.Bounds()
 	if b.Dx() < 1 || b.Dy() < 1 {
 		return src
 	}
 
-	// Sample all 4 corners.
-	tl := toRGBA(src.At(b.Min.X, b.Min.Y))
-	tr := toRGBA(src.At(b.Max.X-1, b.Min.Y))
-	bl := toRGBA(src.At(b.Min.X, b.Max.Y-1))
-	br := toRGBA(src.At(b.Max.X-1, b.Max.Y-1))
+	// edgeSkip excludes this many pixels at each end of a row/col when checking
+	// uniformity. JPEG seam-boundary artifacts (compression block effects from the
+	// adjacent cell) can corrupt the very last pixels of an edge, which would
+	// otherwise cause the entire edge to fail the border test.
+	// edgeSkip = 8 matches the JPEG 8×8 DCT block size: compression artifacts
+	// from the adjacent cell can corrupt up to 8 pixels from a seam boundary.
+	const edgeSkip = 8
 
-	// All corners must agree within tolerance.
-	if colorDiff(tl, tr) > tolerance ||
-		colorDiff(tl, bl) > tolerance ||
-		colorDiff(tl, br) > tolerance {
+	// Inner x-range used when checking rows (skip left/right corners).
+	ix0, ix1 := b.Min.X+edgeSkip, b.Max.X-edgeSkip
+	if ix0 >= ix1 {
+		ix0, ix1 = b.Min.X, b.Max.X
+	}
+	// Inner y-range used when checking cols (skip top/bottom corners).
+	// Recomputed after top/bottom are determined.
+
+	border, ok := detectBorderColor(src, b, tolerance, edgeSkip)
+	if !ok {
 		return src
 	}
 
-	border := tl
-
 	top := b.Min.Y
-	for top < b.Max.Y && rowIsBorder(src, top, b.Min.X, b.Max.X, border, tolerance) {
+	for top < b.Max.Y && rowIsBorder(src, top, ix0, ix1, border, tolerance) {
 		top++
 	}
 
 	bottom := b.Max.Y
-	for bottom > top && rowIsBorder(src, bottom-1, b.Min.X, b.Max.X, border, tolerance) {
+	for bottom > top && rowIsBorder(src, bottom-1, ix0, ix1, border, tolerance) {
 		bottom--
 	}
 
+	iy0, iy1 := top+edgeSkip, bottom-edgeSkip
+	if iy0 >= iy1 {
+		iy0, iy1 = top, bottom
+	}
+
 	left := b.Min.X
-	for left < b.Max.X && colIsBorder(src, left, top, bottom, border, tolerance) {
+	for left < b.Max.X && colIsBorder(src, left, iy0, iy1, border, tolerance) {
 		left++
 	}
 
 	right := b.Max.X
-	for right > left && colIsBorder(src, right-1, top, bottom, border, tolerance) {
+	for right > left && colIsBorder(src, right-1, iy0, iy1, border, tolerance) {
 		right--
 	}
 
-	w := right - left
-	h := bottom - top
+	// Require borders on BOTH sides of each axis before trimming.
+	// A uniform edge on only one side is likely actual photo content (e.g. a
+	// dark background), not a frame. Real separators/frames appear on both sides.
+	trimTop := top > b.Min.Y
+	trimBottom := bottom < b.Max.Y
+	trimLeft := left > b.Min.X
+	trimRight := right < b.Max.X
+
+	newTop, newBottom := b.Min.Y, b.Max.Y
+	newLeft, newRight := b.Min.X, b.Max.X
+	if trimTop && trimBottom {
+		newTop, newBottom = top, bottom
+	}
+	if trimLeft && trimRight {
+		newLeft, newRight = left, right
+	}
+
+	w := newRight - newLeft
+	h := newBottom - newTop
 	if w < 10 || h < 10 {
 		return src
 	}
 
-	crop := image.Rect(left, top, right, bottom)
+	crop := image.Rect(newLeft, newTop, newRight, newBottom)
 	if crop == b {
 		return src
 	}
@@ -81,6 +123,46 @@ func TrimBorder(src image.Image, tolerance int) image.Image {
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(dst, dst.Bounds(), src, crop.Min, draw.Src)
 	return dst
+}
+
+// detectBorderColor finds a border color by trying the 4 corner pixels and the
+// 4 edge-midpoint pixels as candidates. Returns the first candidate for which at
+// least one edge (top row, bottom row, left col, right col) consists entirely of
+// pixels within tolerance of that candidate.
+//
+// edgeSkip pixels are excluded at each end of every row/col check to avoid
+// seam-boundary JPEG artifacts at cell corners causing false negatives.
+func detectBorderColor(src image.Image, b image.Rectangle, tolerance, edgeSkip int) (color.RGBA, bool) {
+	midX := b.Min.X + b.Dx()/2
+	midY := b.Min.Y + b.Dy()/2
+	candidates := []color.RGBA{
+		toRGBA(src.At(b.Min.X, b.Min.Y)),
+		toRGBA(src.At(b.Max.X-1, b.Min.Y)),
+		toRGBA(src.At(b.Min.X, b.Max.Y-1)),
+		toRGBA(src.At(b.Max.X-1, b.Max.Y-1)),
+		toRGBA(src.At(midX, b.Min.Y)),
+		toRGBA(src.At(midX, b.Max.Y-1)),
+		toRGBA(src.At(b.Min.X, midY)),
+		toRGBA(src.At(b.Max.X-1, midY)),
+	}
+	// Inner ranges: skip edgeSkip pixels at each corner to avoid seam artifacts.
+	rx0, rx1 := b.Min.X+edgeSkip, b.Max.X-edgeSkip
+	if rx0 >= rx1 {
+		rx0, rx1 = b.Min.X, b.Max.X
+	}
+	ry0, ry1 := b.Min.Y+edgeSkip, b.Max.Y-edgeSkip
+	if ry0 >= ry1 {
+		ry0, ry1 = b.Min.Y, b.Max.Y
+	}
+	for _, c := range candidates {
+		if rowIsBorder(src, b.Min.Y, rx0, rx1, c, tolerance) ||
+			rowIsBorder(src, b.Max.Y-1, rx0, rx1, c, tolerance) ||
+			colIsBorder(src, b.Min.X, ry0, ry1, c, tolerance) ||
+			colIsBorder(src, b.Max.X-1, ry0, ry1, c, tolerance) {
+			return c, true
+		}
+	}
+	return color.RGBA{}, false
 }
 
 func toRGBA(c color.Color) color.RGBA {
