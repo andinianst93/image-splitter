@@ -13,9 +13,8 @@ type subImager interface {
 }
 
 // TrimBorder detects and removes a uniform-color border from src, iterating
-// until no further border is found. Iteration handles collages whose cells have
-// two distinct border layers (e.g. a narrow white separator followed by a wider
-// grey background), where a single pass can only remove one layer at a time.
+// until no further border is found. Use this for whole-image pre-trim where
+// multiple distinct border layers may need to be removed.
 //
 // Algorithm per iteration:
 //  1. Try candidate border colors from the 4 corners and the 4 edge midpoints.
@@ -29,14 +28,29 @@ type subImager interface {
 func TrimBorder(src image.Image, tolerance int) image.Image {
 	for {
 		prev := src
-		src = trimBorderOnce(src, tolerance)
+		src = trimBorderOnce(src, tolerance, -1)
 		if src == prev {
 			return src
 		}
 	}
 }
 
-func trimBorderOnce(src image.Image, tolerance int) image.Image {
+// TrimBorderOnce applies a single pass of border detection and removal.
+// Use this for per-cell trim after seam-based splitting: it removes only the
+// thin separator residue at cell edges without iterating into the artistic
+// background that becomes the new edge after the first pass.
+//
+// It also caps the trim depth per side at 15% of the image dimension.
+// This prevents wide artistic backgrounds (grey mats, photo content at image
+// boundaries) from being mistaken for separator borders.
+func TrimBorderOnce(src image.Image, tolerance int) image.Image {
+	return trimBorderOnce(src, tolerance, 0.15)
+}
+
+// trimBorderOnce performs one pass of border detection and removal.
+// maxDepthFraction caps the trim depth per side as a fraction of image
+// dimension; pass a negative value for no cap (used by TrimBorder).
+func trimBorderOnce(src image.Image, tolerance int, maxDepthFraction float64) image.Image {
 	b := src.Bounds()
 	if b.Dx() < 1 || b.Dy() < 1 {
 		return src
@@ -101,6 +115,26 @@ func trimBorderOnce(src image.Image, tolerance int) image.Image {
 	trimBottom := bottom < b.Max.Y
 	trimLeft := left > b.Min.X
 	trimRight := right < b.Max.X
+
+	// Per-cell depth cap: if any trim side exceeds maxDepthFraction of the
+	// image dimension, treat it as artistic content (grey mat, background at
+	// image boundary) rather than a separator border, and skip that direction.
+	if maxDepthFraction > 0 {
+		maxW := int(float64(b.Dx()) * maxDepthFraction)
+		maxH := int(float64(b.Dy()) * maxDepthFraction)
+		if left-b.Min.X > maxW {
+			trimLeft = false
+		}
+		if b.Max.X-right > maxW {
+			trimRight = false
+		}
+		if top-b.Min.Y > maxH {
+			trimTop = false
+		}
+		if b.Max.Y-bottom > maxH {
+			trimBottom = false
+		}
+	}
 
 	newTop, newBottom := b.Min.Y, b.Max.Y
 	newLeft, newRight := b.Min.X, b.Max.X

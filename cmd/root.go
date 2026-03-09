@@ -151,7 +151,7 @@ func run(cfg *config.Config) error {
 		out := cell.Image
 
 		if cfg.Trim {
-			out = trimmer.TrimBorder(out, cfg.TrimTolerance)
+			out = trimmer.TrimBorderOnce(out, cfg.TrimTolerance)
 		}
 
 		if cfg.Scale > 1.0 {
